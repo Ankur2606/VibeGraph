@@ -7,7 +7,31 @@ The system instantly maps 19 interconnected SAP tables (Sales Orders, Deliveries
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Directory Structure
+
+```text
+order-to-cash/
+├── backend/               <-- FastAPI & DuckDB API
+│   ├── main.py
+│   ├── query_engine.py    <-- LLM text-to-SQL logic
+│   ├── graph_builder.py   <-- NetworkX graph construction
+│   ├── guardrails.py      <-- Query filtering
+│   ├── data_loader.py
+│   └── schema.md          <-- Schema injected into prompts
+├── frontend/              <-- React & Vite SPA
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── GraphCanvas.jsx  <-- Sigma.js WebGL rendering
+│   │   │   ├── ChatSidebar.jsx  <-- LLM chat interface
+│   │   │   └── NodePopup.jsx
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   ├── package.json
+│   └── vite.config.js
+├── sap-o2c-data/          <-- Raw SAP JSONL Datasets
+├── sessions/              <-- Exported AI Chat Logs
+└── README.md
+```
 
 The application is split into a Python backend and a React frontend.
 
@@ -35,6 +59,28 @@ A modern, responsive single-page application focused on high-density data visual
 - `GraphCanvas.jsx`: The Sigma graph container. Handles complex WebGL interactions like dimming unconnected nodes and highlighting the 1-hop neighborhood of hovered/clicked entities.
 - `ChatSidebar.jsx`: The chat interface for the LLM. 
 - `NodePopup.jsx`: Displays key metadata properties for any clicked node.
+
+---
+
+## 🧠 Architecture Decisions & Strategy
+
+### 1. Database Choice: In-Memory DuckDB
+To process 19 separate JSONL datasets representing the entire SAP Order-to-Cash flow, we selected **DuckDB**. 
+- **Zero-Setup Analytics**: DuckDB natively ingests `.jsonl` files and performs automatic schema inference.
+- **Join Performance**: Because O2C analysis heavily relies on deep relational joins (Customer → Order → Delivery → Billing → Payment), an analytical columnar engine like DuckDB outperforms standard SQLite or transactional DBs. 
+- **Stateless Execution**: Running in-memory allows the FastAPI server to remain strictly stateless, perfectly suited for cloud deployment (e.g., Render).
+
+### 2. LLM Prompting Strategy (Text-to-SQL)
+The Chat Agent is powered by the Groq API (Gpt-oss 120B), transforming plain English into executable DuckDB SQL.
+- **Schema Injection**: We compile the inferred DuckDB schema into a dense Markdown representation (`schema.md`) and inject it into the System Prompt.
+- **Mixed-Query Robustness**: The prompt is specifically hardened against "mixed" prompts (e.g., *"What is total ordered volume and also how is the weather?"*). The LLM is instructed to identify all domain-specific questions, wrap them into a single `UNION ALL` or multi-column SQL query, and politely decline the out-of-domain portions in its text explanation.
+- **Direct Execution**: The backend executes the LLM's generated SQL directly against the DuckDB instance and returns the tabular result to the frontend where it is beautifully rendered via `react-markdown`.
+
+### 3. Guardrails for Token Conservation
+Large Language Models are expensive/rate-limited. To prevent token waste on completely unrelated queries:
+- **Pre-Flight Regex Filtering**: Before a query ever hits the Groq API, it runs through `guardrails.py`.
+- **Intelligent Word Boundaries**: The system extracts word tokens using RegEx (`\b\w+\b`) and performs a set intersection against a massive dictionary of O2C synonyms and abbreviations (e.g., `cust`, `deliv`, `qty`, `distinct`, `sum`). 
+- **Fail-Fast**: If no relevant O2C concepts are detected, the API immediately returns a 400 rejection, saving the LLM prompt entirely.
 
 ---
 

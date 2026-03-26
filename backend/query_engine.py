@@ -37,7 +37,7 @@ You have access to an in-memory DuckDB database with the following schema:
 When the user asks a question:
 1. Write a SQL query against DuckDB to answer it.
 2. Wrap the SQL in a ```sql code block.
-3. After the code block, add a brief plain-English explanation of what the query does.
+3. After the code block, add a clear **Summary and Assumptions** section. Explicitly state the user's intent, and critically, list ANY AND ALL structural assumptions you made to write the query (e.g., "Assumed 'revenue' meant totalNetAmount", "Assumed recent meant 30 days"). Do not provide a generic explanation.
 4. NEVER make up data — only use the tables defined in the schema.
 5. IMPORTANT: All numeric values in these tables are imported as string/VARCHAR types.
    You MUST explicitly cast them to DOUBLE *inside* any aggregate functions or math operators. 
@@ -45,11 +45,13 @@ When the user asks a question:
 6. Use LIMIT clauses (max 50 rows) for list queries.
 7. If the question requires graph traversal or path analysis, instead write a Python
    code block using the variable `con` (the DuckDB connection) and `result` as output.
-8. IMPORTANT FOR MIXED QUERIES (containing both O2C questions and unrelated questions):
+8. IMPORTANT FOR JSON/VARCHAR COMPARISONS: If you are filtering by a string literal (e.g., `WHERE invoiceReference = 'JE_123'`), the left-hand column might have been inferred as a JSON struct by DuckDB. To avoid "Malformed JSON" errors, you MUST cast the column to VARCHAR first: `WHERE CAST(invoiceReference AS VARCHAR) = 'JE_123'`.
+9. IMPORTANT FOR MIXED QUERIES (containing both O2C questions and unrelated questions):
    - You MUST identify ALL the domain-related parts of the question.
    - Do NOT ignore any domain-related questions just because an unrelated question exists.
    - Write a single comprehensive SQL query (e.g. using UNION ALL or multiple columns) that answers ALL the domain-related parts.
    - In your plain-English explanation, politely decline the unrelated/non-domain parts (e.g., "I cannot answer about the weather").
+10. IMPORTANT FOR UNKNOWN IDs: If the user provides a bare ID (e.g., '90504218') without specifying if it is an order, delivery, or billing doc, DO NOT blindly assume it is a Sales Order! When doing JOIN chains, structure your `WHERE` clause to check ALL relevant tables: e.g., `WHERE CAST(soh.salesOrder AS VARCHAR) = 'x' OR CAST(odh.deliveryDocument AS VARCHAR) = 'x' OR CAST(bdh.billingDocument AS VARCHAR) = 'x'`. This ensures you match the document regardless of its specific type.
 """
 
 
@@ -70,14 +72,14 @@ def _execute_sql(sql: str) -> str:
         rows = con.execute(sql).fetchall()
         cols = [d[0] for d in con.execute(sql).description]
         if not rows:
-            return "Query returned no results."
+            return "No matching records were found in the database. Please try adjusting your search terms or filters."
         # Format as markdown table
         header = " | ".join(cols)
         sep = " | ".join(["---"] * len(cols))
         body = "\n".join(" | ".join(str(v) for v in row) for row in rows[:50])
         return f"{header}\n{sep}\n{body}"
     except Exception as e:
-        return f"SQL execution error: {e}"
+        return "I encountered a technical issue while generating the query. Could you please clarify your request or provide more specific terms?"
 
 
 def _execute_python(code: str) -> str:
@@ -88,7 +90,7 @@ def _execute_python(code: str) -> str:
         result = local_ns.get("result")
         return str(result) if result is not None else "Executed successfully (no result variable set)."
     except Exception:
-        return f"Python execution error:\n{traceback.format_exc()}"
+        return "I encountered a programmatic error while attempting to traverse the graph. Please rephrase or try a different approach."
 
 
 def answer_query(user_message: str) -> dict:
@@ -103,7 +105,8 @@ def answer_query(user_message: str) -> dict:
             {"role": "system", "content": system},
             {"role": "user", "content": user_message},
         ],
-        temperature=0.1,
+        # reasoning_effort="medium",
+        temperature=0.8,
         max_tokens=1024,
     )
 
@@ -114,6 +117,10 @@ def answer_query(user_message: str) -> dict:
     explanation = re.sub(r"```.*?```", "", llm_text, flags=re.DOTALL).strip()
 
     execution_result = ""
+    # Edge case: LLM failed to output any format
+    if code_type == "none" and not explanation.strip():
+        explanation = "I couldn't quite understand how to format a query for that. Could you please clarify your question and ensure it is related to Order-to-Cash data?"
+
     if code_type == "sql" and code:
         execution_result = _execute_sql(code)
     elif code_type == "python" and code:

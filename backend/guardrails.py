@@ -27,8 +27,14 @@ REJECTION_MESSAGE = (
 )
 
 def is_on_topic(message: str) -> bool:
-    """Return True if the message contains at least one O2C keyword based on word tokens."""
-    words = set(re.findall(r'\b\w+\b', message.lower()))
+    """Return True if the message contains at least one O2C keyword or looks like an ID query."""
+    text = message.lower()
+    
+    # 1. Allow if it contains ID-like patterns (e.g., pure numbers > 5 digits, or prefixes like JE_)
+    if re.search(r'\b\d{6,15}\b', text) or re.search(r'\b(?:je|so|do|bd|bp)_[a-z0-9]+\b', text):
+        return True
+
+    words = set(re.findall(r'\b\w+\b', text))
     
     # Check for direct word intersection
     if words.intersection(O2C_KEYWORDS):

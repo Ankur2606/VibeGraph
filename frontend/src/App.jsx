@@ -19,6 +19,10 @@ export default function App() {
           <span className="breadcrumb-item">Mapping</span>
           <span className="breadcrumb-sep">/</span>
           <span className="breadcrumb-item active">Order to Cash</span>
+          <span className="breadcrumb-sep" style={{marginLeft: '12px', marginRight: '8px', color: '#e5e7eb'}}>|</span>
+          <span style={{ fontSize: '11px', color: '#9ca3af', fontWeight: 'normal' }}>
+             Note: Backend is deployed on Render (free tier). Initial load may take ~50s to wake up.
+          </span>
         </div>
         <div className="top-bar-actions">
           <button className="btn-ghost" onClick={() => setSelectedNode(null)}>

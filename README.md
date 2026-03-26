@@ -70,21 +70,24 @@ To process 19 separate JSONL datasets representing the entire SAP Order-to-Cash 
 - **Join Performance**: Because O2C analysis heavily relies on deep relational joins (Customer → Order → Delivery → Billing → Payment), an analytical columnar engine like DuckDB outperforms standard SQLite or transactional DBs. 
 - **Stateless Execution**: Running in-memory allows the FastAPI server to remain strictly stateless, perfectly suited for cloud deployment (e.g., Render).
 
-### 2. LLM Prompting Strategy (Text-to-SQL)
-The Chat Agent is powered by the Groq API (Gpt-oss 120B), transforming plain English into executable DuckDB SQL.
-- **Schema Injection**: We compile the inferred DuckDB schema into a dense Markdown representation (`schema.md`) and inject it into the System Prompt.
-- **Mixed-Query Robustness**: The prompt is specifically hardened against "mixed" prompts (e.g., *"What is total ordered volume and also how is the weather?"*). The LLM is instructed to identify all domain-specific questions, wrap them into a single `UNION ALL` or multi-column SQL query, and politely decline the out-of-domain portions in its text explanation.
-- **Direct Execution**: The backend executes the LLM's generated SQL directly against the DuckDB instance and returns the tabular result to the frontend where it is beautifully rendered via `react-markdown`.
+### 2. Advanced LLM Prompting Strategy (Text-to-SQL)
+The Chat Agent is powered by the Groq API (Gpt-oss 120B), transforming plain English into executable DuckDB SQL using a highly structured, multi-section prompt system:
+- **Explicit Assumptions & Edge Cases**: The LLM is explicitly instructed to never write a raw generic explanation. Instead, it must draft a `**Summary & Assumptions**` header detailing exactly how it interpreted vague user requests (e.g., "Assumed recent meant 30 days").
+- **Conversational Fallbacks**: The Python backend intercepts raw SQL tracebacks, graph traversal crashes, and empty DuckDB result sets. Rather than returning intimidating stack traces, it issues polite conversational prompts asking the user to clarify their intent or adjust their filters.
+- **Robust ID Tracking**: When users query bare IDs (e.g., `90504218`) without specifying the document type, the Prompt forces the LLM to dynamically structure `WHERE` clauses using `OR` statements across all O2C tables (`salesOrder OR deliveryDocument OR billingDocument`), preventing 0-result hallucinated INNER JOINs.
+- **Mixed-Query Robustness**: The LLM isolates domain-specific O2C questions from completely unrelated questions (*"What is total volume and how is the weather?"*), translating the relevant parts into SQL and politely declining the rest.
 
-### 3. Guardrails for Token Conservation
-Large Language Models are expensive/rate-limited. To prevent token waste on completely unrelated queries:
-- **Pre-Flight Regex Filtering**: Before a query ever hits the Groq API, it runs through `guardrails.py`.
-- **Intelligent Word Boundaries**: The system extracts word tokens using RegEx (`\b\w+\b`) and performs a set intersection against a massive dictionary of O2C synonyms and abbreviations (e.g., `cust`, `deliv`, `qty`, `distinct`, `sum`). 
-- **Fail-Fast**: If no relevant O2C concepts are detected, the API immediately returns a 400 rejection, saving the LLM prompt entirely.
+### 3. Regex Guardrails & Token Conservation
+Large Language Models are expensive and rate-limited. To prevent token waste on unrelated chat queries, we built a token-free Python interceptor:
+- **Boundary Filtering**: Before hitting the Groq API, `guardrails.py` performs a set intersection against a large dictionary of O2C synonyms, abbreviations, and financial terms (e.g., `cust`, `deliv`, `dso` `sum`). 
+- **Bare ID Allowlist**: The guardrail is fine-tuned to explicitly allow queries consisting purely of scalar integers (Sales Orders) or standard SAP prefixes (like `JE_94006...`), ensuring users can quickly track documents without writing full sentences.
+- **Fail-Fast**: If no relevant O2C concepts or valid ID patterns are detected, the API immediately returns a 400 rejection, saving the LLM tokens completely.
 
 ---
 
 ## 🚀 Getting Started
+
+> **Note on Deployment**: This application's backend is hosted on a free tier instance of Render. If the app hasn't been used in the last 15 minutes, **the initial graph load and chat functionality may take ~50 seconds to wake up**. Please be patient on the first request!
 
 ### Prerequisites
 - Python 3.10+

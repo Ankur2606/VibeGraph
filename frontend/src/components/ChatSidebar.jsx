@@ -37,8 +37,16 @@ function MessageBubble({ msg }) {
           {msg.text}
         </ReactMarkdown>
       </div>
-      {msg.code && (
-        <div className="message-code" style={{ maxWidth: 300, marginTop: 6 }}>
+      {msg.code && msg.code.trim() && (
+        <div className="message-code" style={{ 
+          maxHeight: '250px', 
+          overflowY: 'auto',
+          overflowX: 'auto',
+          marginTop: 6, 
+          fontSize: '11px',
+          whiteSpace: 'pre',
+          wordBreak: 'normal'
+        }}>
           {msg.code}
         </div>
       )}

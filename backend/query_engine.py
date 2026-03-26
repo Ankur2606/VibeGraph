@@ -29,68 +29,111 @@ def _load_schema() -> str:
         return f.read()
 
 
-SYSTEM_PROMPT = """You are an expert SAP Order-to-Cash data analyst. 
-You have access to an in-memory DuckDB database with the following schema:
+SYSTEM_PROMPT = """\
+## ROLE
+You are an expert SAP Order-to-Cash (O2C) SQL analyst with access to an in-memory DuckDB database.
 
+## SCHEMA
 {schema}
 
-When the user asks a question:
-1. Write a SQL query against DuckDB to answer it.
-2. Wrap the SQL in a ```sql code block.
-3. After the code block, add a clear **Summary and Assumptions** section. Explicitly state the user's intent, and critically, list ANY AND ALL structural assumptions you made to write the query (e.g., "Assumed 'revenue' meant totalNetAmount", "Assumed recent meant 30 days"). Do not provide a generic explanation.
-4. NEVER make up data — only use the tables defined in the schema.
-5. IMPORTANT: All numeric values in these tables are imported as string/VARCHAR types.
-   You MUST explicitly cast them to DOUBLE *inside* any aggregate functions or math operators. 
-   Example: Use `SUM(CAST(col AS DOUBLE))` and NOT `SUM(col)`.
-6. Use LIMIT clauses (max 50 rows) for list queries.
-7. If the question requires graph traversal or path analysis, instead write a Python
-   code block using the variable `con` (the DuckDB connection) and `result` as output.
-8. IMPORTANT FOR JSON/VARCHAR COMPARISONS: If you are filtering by a string literal (e.g., `WHERE invoiceReference = 'JE_123'`), the left-hand column might have been inferred as a JSON struct by DuckDB. To avoid "Malformed JSON" errors, you MUST cast the column to VARCHAR first: `WHERE CAST(invoiceReference AS VARCHAR) = 'JE_123'`.
-9. IMPORTANT FOR MIXED QUERIES (containing both O2C questions and unrelated questions):
-   - You MUST identify ALL the domain-related parts of the question.
-   - Do NOT ignore any domain-related questions just because an unrelated question exists.
-   - Write a single comprehensive SQL query (e.g. using UNION ALL or multiple columns) that answers ALL the domain-related parts.
-   - In your plain-English explanation, politely decline the unrelated/non-domain parts (e.g., "I cannot answer about the weather").
-10. IMPORTANT FOR UNKNOWN IDs: If the user provides a bare ID (e.g., '90504218') without specifying if it is an order, delivery, or billing doc, DO NOT blindly assume it is a Sales Order! When doing JOIN chains, structure your `WHERE` clause to check ALL relevant tables: e.g., `WHERE CAST(soh.salesOrder AS VARCHAR) = 'x' OR CAST(odh.deliveryDocument AS VARCHAR) = 'x' OR CAST(bdh.billingDocument AS VARCHAR) = 'x'`. This ensures you match the document regardless of its specific type.
+---
+
+## TASK
+Given a user question about O2C data, generate a DuckDB SQL query that answers it, then write a brief structured response.
+
+---
+
+## CONSTRAINTS (ALL MANDATORY)
+1. **Fenced SQL only**: ALWAYS wrap your SQL in triple-backtick fenced blocks: ```sql ... ``` — NEVER emit raw SQL or SQL comments outside of a code block.
+2. **No fabricated data**: Only query tables/columns that exist in the schema above.
+3. **Numeric casting**: All numeric columns are VARCHAR. ALWAYS cast inside aggregates: `SUM(CAST(col AS DOUBLE))`, never `SUM(col)`.
+4. **JSON/VARCHAR comparisons**: Use `CAST(col AS VARCHAR) = 'literal'` to avoid "Malformed JSON" errors.
+5. **LIMIT**: Add `LIMIT 50` to all list/row queries.
+6. **Unknown IDs**: If the user gives a bare ID (e.g. `91150147`) with no document type context, check ALL O2C key columns with OR logic: `WHERE CAST(soh.salesOrder AS VARCHAR) = 'x' OR CAST(odh.deliveryDocument AS VARCHAR) = 'x' OR CAST(bdh.billingDocument AS VARCHAR) = 'x'`.
+7. **Mixed queries**: For queries mixing O2C and non-O2C topics, answer the O2C parts fully and politely decline the non-O2C parts in text.
+8. **Python fallback**: If graph traversal is needed, use a ```python ``` block with `con` (DuckDB connection) and set `result`.
+9. **Word limit**: Summary and Assumptions section must be ≤ 120 words.
+
+---
+
+## OUTPUT FORMAT (STRICT — follow this exact structure every time)
+
+```sql
+-- your DuckDB query here
+```
+
+**Summary and Assumptions**
+- **Intent**: [One sentence: what the user wants]
+- **Assumptions**: [Bullet list of structural choices you made, max 4 bullets]
+
+**Result:**
+[Leave blank — the system will populate this automatically]
+
+---
+
+## OUTPUT EXAMPLE
+
+Input: `91150147 - Find the journal entry number linked to this?`
+
+```sql
+SELECT DISTINCT CAST(je.accountingDocument AS VARCHAR) AS journalEntryNumber
+FROM journal_entry_items_accounts_receivable AS je
+JOIN billing_document_headers AS bdh
+  ON CAST(bdh.accountingDocument AS VARCHAR) = CAST(je.accountingDocument AS VARCHAR)
+WHERE CAST(bdh.billingDocument AS VARCHAR) = '91150147'
+   OR CAST(bdh.salesDocument AS VARCHAR) = '91150147'
+LIMIT 50;
+```
+
+**Summary and Assumptions**
+- **Intent**: Retrieve the journal entry (accountingDocument) linked to ID 91150147.
+- **Assumptions**:
+  - ID could be a Sales Order, Delivery, or Billing Document — all checked with OR.
+  - All key columns cast to VARCHAR for safe string comparison.
+  - Journal entry linked via billing_document_headers.accountingDocument.
 """
-
-
-def _extract_code(text: str) -> tuple[str, str]:
-    """Return (code_type, code) from the first code block found."""
+def _extract_code(text: str) -> tuple[str, str, bool]:
+    """Return (code_type, code, was_fenced). was_fenced=True means the LLM properly wrapped in backticks."""
     sql_match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if sql_match:
-        return "sql", sql_match.group(1).strip()
+        return "sql", sql_match.group(1).strip(), True
     py_match = re.search(r"```python\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if py_match:
-        return "python", py_match.group(1).strip()
-    return "none", ""
+        return "python", py_match.group(1).strip(), True
+
+    # Fallback: aggressively scrape raw SQL if LLM forgot fences
+    raw_sql_match = re.search(r"(?i)\b(SELECT\s+|WITH\s+[a-z0-9_]+\s+AS\s*\().*?;", text, re.DOTALL)
+    if raw_sql_match:
+        return "sql", raw_sql_match.group(0).strip(), False  # NOT fenced!
+
+    return "none", "", False
 
 
-def _execute_sql(sql: str) -> str:
+def _execute_sql(sql: str) -> tuple[str, bool]:
     try:
         con = get_con()
         rows = con.execute(sql).fetchall()
         cols = [d[0] for d in con.execute(sql).description]
         if not rows:
-            return "No matching records were found in the database. Please try adjusting your search terms or filters."
+            return "No matching records were found in the database. Please try adjusting your search terms or filters.", True
         # Format as markdown table
         header = " | ".join(cols)
         sep = " | ".join(["---"] * len(cols))
         body = "\n".join(" | ".join(str(v) for v in row) for row in rows[:50])
-        return f"{header}\n{sep}\n{body}"
+        return f"{header}\n{sep}\n{body}", True
     except Exception as e:
-        return "I encountered a technical issue while generating the query. Could you please clarify your request or provide more specific terms?"
+        return "I encountered a technical issue while generating the query. Could you please clarify your request or provide more specific terms?", False
 
 
-def _execute_python(code: str) -> str:
+def _execute_python(code: str) -> tuple[str, bool]:
     try:
         con = get_con()
         local_ns = {"con": con, "result": None}
         exec(code, {}, local_ns)  # noqa: S102
         result = local_ns.get("result")
-        return str(result) if result is not None else "Executed successfully (no result variable set)."
+        return str(result) if result is not None else "Executed successfully (no result variable set).", True
     except Exception:
-        return "I encountered a programmatic error while attempting to traverse the graph. Please rephrase or try a different approach."
+        return "I encountered a programmatic error while attempting to traverse the graph. Please rephrase or try a different approach.", False
 
 
 def answer_query(user_message: str) -> dict:
@@ -105,26 +148,65 @@ def answer_query(user_message: str) -> dict:
             {"role": "system", "content": system},
             {"role": "user", "content": user_message},
         ],
-        # reasoning_effort="medium",
-        temperature=0.8,
+        reasoning_effort="medium",
+        temperature=1,
         max_tokens=1024,
     )
 
     llm_text = response.choices[0].message.content
-    code_type, code = _extract_code(llm_text)
+    code_type, code, was_fenced = _extract_code(llm_text)
 
     # Extract human-readable explanation (text outside the code block)
-    explanation = re.sub(r"```.*?```", "", llm_text, flags=re.DOTALL).strip()
+    if code_type != "none" and code:
+        if was_fenced:
+            # Cleanly strip the fenced block
+            explanation = re.sub(r"```(?:sql|python).*?```", "", llm_text, flags=re.DOTALL).strip()
+        else:
+            # Unfenced: strip the raw SQL string so it doesn't bleed into the chat bubble
+            explanation = llm_text.replace(code, "").strip()
+    else:
+        explanation = llm_text.strip()
+
+    # Nuclear sweep: strip raw SQL content that may have bled into explanation
+    # Step 1: Remove C-style /* ... */ blocks (with DOTALL to handle multiline)
+    explanation = re.sub(r"/\*.*?\*/", "", explanation, flags=re.DOTALL)
+    # Step 2: Remove lines that start with primary SQL keywords (not short words like AS/ON to avoid stripping English)
+    SQL_KEYWORD_PATTERN = re.compile(
+        r"^\s*(SELECT|WITH\s+\w|FROM\s+\w|JOIN\s+\w|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|"
+        r"WHERE\s|GROUP\s+BY|ORDER\s+BY|UNION|HAVING|LIMIT\s|CAST\s*\(|"
+        r"--[^\n]*)[^\n]*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    cleaned = SQL_KEYWORD_PATTERN.sub("", explanation)
+
+    # Collapse excess blank lines and strip
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    if cleaned:
+        explanation = cleaned
+    # else: LLM gave ONLY raw SQL (no summary text) → fall through to edge-case handler below
 
     execution_result = ""
-    # Edge case: LLM failed to output any format
-    if code_type == "none" and not explanation.strip():
+    success = True
+    # Edge case: LLM failed to output any conversational text at all (or everything was SQL)
+    if not explanation.strip():
         explanation = "I couldn't quite understand how to format a query for that. Could you please clarify your question and ensure it is related to Order-to-Cash data?"
 
     if code_type == "sql" and code:
-        execution_result = _execute_sql(code)
+        execution_result, success = _execute_sql(code)
     elif code_type == "python" and code:
-        execution_result = _execute_python(code)
+        execution_result, success = _execute_python(code)
+
+    if not success:
+        # Wipe the LLM's explanation and code entirely so the UI only shows the custom error
+        explanation = f"> ⚠️ **Query Error:** {execution_result}"
+        execution_result = ""
+        code = ""
+
+    # Strip any LLM-generated **Result:** placeholder to avoid double Result keys in the UI
+    explanation = re.sub(r"\*{0,2}Result:{0,1}\*{0,2}\s*(\[Leave blank[^\]]*\])?", "", explanation, flags=re.IGNORECASE).strip()
+    # Collapse excess blank lines left by stripping
+    explanation = re.sub(r"\n{3,}", "\n\n", explanation).strip()
 
     # Build the final answer
     answer_parts = []

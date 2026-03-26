@@ -194,7 +194,8 @@ export default function GraphCanvas({ onNodeSelect }) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetch('/api/graph')
+    const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+    fetch(`${API_BASE}/api/graph`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()

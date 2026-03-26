@@ -1,0 +1,122 @@
+=== O2C Graph Intelligence Chat Agent Benchmark ===
+
+[1/6] Query: What is the total number of sales orders grouped by their transaction currency?
+  Answer: **Explanation:**  
+This query counts the distinct sales order numbers (`salesOrder`) for each transaction currency found in the `sales_order_headers` table, returning the total number of sales orders per currency and sorting the results from highest to lowest count.
+
+**Result:**
+transactionCurrency | total_sales_orders
+--- | ---
+INR | 100
+  Code (sql):
+    SELECT 
+        transactionCurrency,
+        COUNT(DISTINCT salesOrder) AS total_sales_orders
+    FROM 
+        sales_order_headers
+    GROUP BY 
+        transactionCurrency
+    ORDER BY 
+        total_sales_orders DESC;
+  Speed:  3.93s
+--------------------------------------------------
+[2/6] Query: Which customer has the highest total net amount across all their sales orders?
+  Answer: **Explanation:**  
+The query groups all sales‑order header records by the customer (`soldToParty`), adds up the `totalNetAmount` for each customer (casting the column to a numeric type), orders the results from highest to lowest total, and returns only the top row – i.e., the customer with the highest cumulative net amount across all of their sales orders.
+
+**Result:**
+soldToParty | total_net_amount
+--- | ---
+320000083 | 27776.92999999999
+  Code (sql):
+    SELECT
+        soldToParty,
+        SUM(CAST(totalNetAmount AS DOUBLE)) AS total_net_amount
+    FROM sales_order_headers
+    GROUP BY soldToParty
+    ORDER BY total_net_amount DESC
+    LIMIT 1;
+  Speed:  3.06s
+--------------------------------------------------
+[3/6] Query: Calculate the average amount made in INR payments that were cleared after April 2025.
+  Answer: **Explanation:**  
+The query selects all payment records whose currency is Indian Rupees (INR) and whose `clearingDate` is later than April 30 2025. It converts the payment amount (`amountInTransactionCurrency`) to a numeric type and then computes the average of those amounts, returning it as `avg_amount_inr`.
+
+**Result:**
+avg_amount_inr
+---
+-8.120488408686859e-15
+  Code (sql):
+    SELECT 
+        AVG(CAST(amountInTransactionCurrency AS DOUBLE)) AS avg_amount_inr
+    FROM 
+        payments_accounts_receivable
+    WHERE 
+        transactionCurrency = 'INR'
+        AND clearingDate IS NOT NULL
+        AND CAST(clearingDate AS DATE) > DATE '2025-04-30';
+  Speed:  2.98s
+--------------------------------------------------
+[4/6] Query: Are there any billing documents that have been cancelled? If so, count them.
+  Answer: **SQL**
+
+
+
+**Explanation**
+
+The query scans the `billing_document_headers` table, filters rows whose `billingDocumentIsCancelled` flag indicates cancellation (either the string `'true'` or a boolean `true`), and counts the distinct `billingDocument` identifiers that meet this condition. The result is the total number of cancelled billing documents.
+
+**Result:**
+cancelled_billing_documents
+---
+80
+  Code (sql):
+    SELECT 
+        COUNT(DISTINCT billingDocument) AS cancelled_billing_documents
+    FROM 
+        billing_document_headers
+    WHERE 
+        billingDocumentIsCancelled = 'true'      -- cancelled flag (string)
+        OR billingDocumentIsCancelled = true;   -- in case it is stored as a boolean
+  Speed:  2.94s
+--------------------------------------------------
+[5/6] Query: List the top 3 shipping points with the highest number of outbound deliveries.
+  Answer: **Explanation:**  
+This query groups all outbound delivery header records by their `shippingPoint`, counts how many deliveries (`deliveryDocument`) exist for each point, orders the results from highest to lowest count, and returns only the top three shipping points.
+
+**Result:**
+shippingPoint | delivery_count
+--- | ---
+WB05 | 72
+1301 | 9
+1920 | 3
+  Code (sql):
+    SELECT
+        shippingPoint,
+        COUNT(*) AS delivery_count
+    FROM outbound_delivery_headers
+    GROUP BY shippingPoint
+    ORDER BY delivery_count DESC
+    LIMIT 3;
+  Speed:  4.39s
+--------------------------------------------------
+[6/6] Query: What is the total volume and gross weight of all outbound delivery items?
+  Answer: The **outbound_delivery_items** table in the provided schema contains the following columns:
+
+- `deliveryDocument`
+- `deliveryDocumentItem`
+- `referenceSdDocument`
+- `referenceSdDocumentItem`
+- `actualDeliveryQuantity`
+- `deliveryQuantityUnit`
+- `plant`
+- `storageLocation`
+- `batch`
+- `itemBillingBlockReason`
+- `lastChangeDate`
+
+There are no columns that store **volume** or **gross weight** for each delivery item. Because the required data does not exist in the available tables, a SQL query cannot be written to calculate “total volume” or “gross weight” of outbound delivery items.
+
+If you have another table or additional fields that capture volume and weight, please let me know and I can incorporate them into the query. Otherwise, with the current schema it isn’t possible to compute those totals.
+  Speed:  3.63s
+--------------------------------------------------

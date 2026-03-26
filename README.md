@@ -1,4 +1,5 @@
 # Order-to-Cash (O2C) Graph Intelligence System
+<img width="2558" height="1467" alt="image" src="https://github.com/user-attachments/assets/6155be52-3bf8-4bad-a961-1758623e7e81" />
 
 This repository contains a full-stack Graph Intelligence platform designed to visualize complex SAP Order-to-Cash data relationships and provide a natural language querying interface. 
 
@@ -90,26 +91,3 @@ A modern, responsive single-page application focused on high-density data visual
 - **Responsive Layout**: Minimize the chat window to expand the graph canvas to 100% full-screen width.
 
 ---
-
-## 🌍 Deployment Guide
-
-To deploy this project to the public internet, you need to host the backend and frontend separately. The backend is configured with wildcard CORS (`allow_origins=["*"]`) so it will successfully accept requests from your deployed frontend domain.
-
-### 1. Deploying the Backend (Render / Railway / Heroku)
-The backend is a standard FastAPI app. The easiest way to deploy it is via a platform-as-a-service like Render.
-1. Create a `Procfile` (or configure the start command in your dashboard):
-   ```
-   web: uvicorn main:app --host 0.0.0.0 --port $PORT
-   ```
-2. Set the Environment Variable in your dashboard:
-   - `GROQ_API_KEY`: `your-production-groq-key`
-3. Deploy! Note the public URL (e.g., `https://my-backend.onrender.com`).
-
-### 2. Deploying the Frontend (Vercel / Netlify / GitHub Pages)
-Because the frontend connects to the backend, you must point the Vite proxy/API calls to your newly deployed backend URL.
-
-1. In `frontend/vite.config.js`, update the API proxy or replace it with a direct hardcoded fetch URL pointing to your backend in production. The easiest method for Vercel is replacing `fetch('/api/graph')` in the React code with `fetch('https://your-backend-url.com/api/graph')`.
-2. Link your GitHub repository to Vercel.
-3. Use the build command: `npm run build`
-4. Use the output directory: `dist`
-5. Deploy!
